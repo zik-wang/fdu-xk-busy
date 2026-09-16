@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         复旦选课占用表
 // @namespace    https://github.com/zik-wang/fdu-xk-busy
-// @version      1.1.0
+// @version      1.2.0
 // @description  新版 xk.fudan.edu.cn：无法上课时间表 + 邯郸/枫林连堂跨校提示。不自动选课。
 // @author       classmates
 // @match        *://xk.fudan.edu.cn/*
@@ -11,6 +11,8 @@
 // @grant        none
 // @license      MIT
 // @run-at       document-start
+// @downloadURL  https://raw.githubusercontent.com/zik-wang/fdu-xk-busy/main/fudan-xk-busy.user.js
+// @updateURL    https://raw.githubusercontent.com/zik-wang/fdu-xk-busy/main/fudan-xk-busy.user.js
 // ==/UserScript==
 
 (function () {
@@ -58,6 +60,8 @@
         hideBusy: raw.hideBusy !== false,
         markCross: raw.markCross !== false,
         collapsed: !!raw.collapsed,
+        panelLeft: Number.isFinite(Number(raw.panelLeft)) ? Number(raw.panelLeft) : null,
+        panelTop: Number.isFinite(Number(raw.panelTop)) ? Number(raw.panelTop) : null,
       };
     } catch {
       return {
@@ -66,6 +70,8 @@
         hideBusy: true,
         markCross: true,
         collapsed: false,
+        panelLeft: null,
+        panelTop: null,
       };
     }
   }
@@ -554,8 +560,8 @@
     style.textContent = `
       #fdu-xk-banner{position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#f59e0b;color:#111827;padding:8px 14px;font:14px/1.4 system-ui,sans-serif;display:flex;gap:12px;align-items:center;justify-content:space-between}
       #fdu-xk-panel{position:fixed;left:12px;top:48px;z-index:2147483647;width:420px;max-height:calc(100vh - 64px);overflow:auto;background:#111827;color:#e5e7eb;border:2px solid #f59e0b;border-radius:10px;font:12px/1.4 system-ui,sans-serif}
-      #fdu-xk-panel header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#1f2937;position:sticky;top:0}
-      #fdu-xk-panel h1{margin:0;font-size:13px;font-weight:600}
+      #fdu-xk-panel header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#1f2937;position:sticky;top:0;cursor:move;user-select:none;touch-action:none}
+      #fdu-xk-panel h1{margin:0;font-size:13px;font-weight:600;pointer-events:none}
       #fdu-xk-panel .body{padding:8px 10px 12px}
       #fdu-xk-panel.collapsed .body{display:none}
       #fdu-xk-panel label{display:flex;gap:6px;align-items:center;margin:4px 0}
@@ -591,8 +597,11 @@
     if (state.collapsed) panel.classList.add("collapsed");
     panel.innerHTML = `
       <header>
-        <h1>无法上课时间表</h1>
-        <button type="button" class="bar" id="fdu-xk-toggle">${state.collapsed ? "展开" : "收起"}</button>
+        <h1>无法上课时间表 · 拖这里挪开</h1>
+        <span>
+          <button type="button" class="bar" id="fdu-xk-reset">复位</button>
+          <button type="button" class="bar" id="fdu-xk-toggle">${state.collapsed ? "展开" : "收起"}</button>
+        </span>
       </header>
       <div class="body">
         <p style="margin:0 0 8px;color:#9ca3af">点格表示这学期这节不能排课。邯郸↔枫林连堂（非第5→第6节 12:30）标琥珀色「无法实现的区域跨越」。不自动选课。</p>
@@ -639,6 +648,72 @@
       toggleBusy(btn.getAttribute("data-k"));
     });
     renderGrid();
+    applyPanelPos(panel);
+    enableDrag(panel, panel.querySelector("header"));
+    document.getElementById("fdu-xk-reset").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      state.panelLeft = null;
+      state.panelTop = null;
+      panel.style.left = "12px";
+      panel.style.top = "48px";
+      panel.style.right = "auto";
+      saveState();
+    });
+  }
+
+  function clamp(n, min, max) {
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function applyPanelPos(panel) {
+    if (state.panelLeft == null || state.panelTop == null) return;
+    panel.style.left = state.panelLeft + "px";
+    panel.style.top = state.panelTop + "px";
+    panel.style.right = "auto";
+  }
+
+  function enableDrag(panel, handle) {
+    if (!handle) return;
+    let dragging = false;
+    let sx = 0;
+    let sy = 0;
+    let sl = 0;
+    let st = 0;
+    handle.addEventListener("pointerdown", (ev) => {
+      if (ev.target.closest("button")) return;
+      dragging = true;
+      sx = ev.clientX;
+      sy = ev.clientY;
+      const rect = panel.getBoundingClientRect();
+      sl = rect.left;
+      st = rect.top;
+      try {
+        handle.setPointerCapture(ev.pointerId);
+      } catch (_) {}
+      ev.preventDefault();
+    });
+    handle.addEventListener("pointermove", (ev) => {
+      if (!dragging) return;
+      const w = panel.offsetWidth;
+      const left = clamp(sl + ev.clientX - sx, 0, Math.max(0, window.innerWidth - w));
+      const top = clamp(st + ev.clientY - sy, 0, Math.max(0, window.innerHeight - 48));
+      panel.style.left = left + "px";
+      panel.style.top = top + "px";
+      panel.style.right = "auto";
+    });
+    function endDrag(ev) {
+      if (!dragging) return;
+      dragging = false;
+      try {
+        handle.releasePointerCapture(ev.pointerId);
+      } catch (_) {}
+      const rect = panel.getBoundingClientRect();
+      state.panelLeft = Math.round(rect.left);
+      state.panelTop = Math.round(rect.top);
+      saveState();
+    }
+    handle.addEventListener("pointerup", endDrag);
+    handle.addEventListener("pointercancel", endDrag);
   }
 
   function watchDom() {
