@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         复旦选课占用表
 // @namespace    https://github.com/zik-wang/fdu-xk-busy
-// @version      1.0.0
+// @version      1.1.0
 // @description  新版 xk.fudan.edu.cn：无法上课时间表 + 邯郸/枫林连堂跨校提示。不自动选课。
 // @author       classmates
-// @match        https://xk.fudan.edu.cn/course-selection/*
+// @match        *://xk.fudan.edu.cn/*
+// @match        *://*.fudan.edu.cn/course-selection/*
+// @match        *://*.fudan.edu.cn/xk/*
 // @icon         https://www.fudan.edu.cn/_upload/tpl/00/0e/14/template14/images/favicon.ico
 // @grant        none
 // @license      MIT
-// @run-at       document-idle
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -415,10 +417,11 @@
   }
 
   function courseFromRow(row) {
-    const codeEl = row.querySelector(".lesson-code");
-    const code = codeEl ? codeEl.textContent.trim() : "";
-    const cached = code && lessonCache.get(code);
     const text = rowText(row);
+    const codeEl = row.querySelector(".lesson-code");
+    const codeMatch = text.match(/[A-Z]{2,}\d{5,}(?:\.\d+)?/);
+    const code = (codeEl ? codeEl.textContent.trim() : "") || (codeMatch ? codeMatch[0] : "");
+    const cached = code && lessonCache.get(code);
     const slots = (cached && cached.slots.length ? cached.slots : parseSlots(text)) || [];
     const campus =
       (cached && cached.campus) ||
@@ -430,6 +433,31 @@
       slots: slots,
       blocks: toBlocks(slots),
     };
+  }
+
+  function listRows() {
+    const out = [];
+    const seen = new Set();
+    document
+      .querySelectorAll(
+        ".el-table__body-wrapper tbody tr, .el-table__row, table tbody tr, [role='row']",
+      )
+      .forEach((row) => {
+        if (seen.has(row)) return;
+        if (row.closest("#fdu-xk-panel, #fdu-xk-banner")) return;
+        if (row.closest("#pane-selectedLesson")) return;
+        const text = rowText(row);
+        if (!text || text.length < 8) return;
+        const looksLikeCourse =
+          /选课/.test(text) ||
+          /星期[一二三四五六日]/.test(text) ||
+          /[A-Z]{2,}\d{5,}/.test(text);
+        if (!looksLikeCourse) return;
+        if (!parseSlots(text).length && !row.querySelector(".lesson-code")) return;
+        seen.add(row);
+        out.push(row);
+      });
+    return out;
   }
 
   function clearMarks(row) {
@@ -456,25 +484,22 @@
   }
 
   function applyFilters() {
-    document.querySelectorAll(".el-table__body-wrapper tbody tr").forEach((row) => {
-      if (row.closest("#pane-selectedLesson")) return;
-      if (!row.querySelector("td")) return;
-      const text = rowText(row);
-      if (!text) return;
-      if (!row.querySelector(".lesson-code") && parseSlots(text).length === 0) return;
-      markRow(row, classify(courseFromRow(row)));
-    });
+    const rows = listRows();
+    rows.forEach((row) => markRow(row, classify(courseFromRow(row))));
     const stats = document.getElementById("fdu-xk-stats");
     if (stats) {
-      const busyN = document.querySelectorAll("tr.fdu-xk-busy").length;
-      const crossN = document.querySelectorAll("tr.fdu-xk-cross").length;
+      const busyN = document.querySelectorAll(".fdu-xk-busy").length;
+      const crossN = document.querySelectorAll(".fdu-xk-cross").length;
       stats.textContent =
         "占用格 " +
         state.busy.length +
         " · 本页占用冲突 " +
         busyN +
         " · 跨校不可达 " +
-        crossN;
+        crossN +
+        " · 识别到 " +
+        rows.length +
+        " 行";
     }
   }
 
@@ -527,7 +552,8 @@
     const style = document.createElement("style");
     style.id = "fdu-xk-style";
     style.textContent = `
-      #fdu-xk-panel{position:fixed;right:16px;bottom:16px;z-index:99999;width:420px;max-height:82vh;overflow:auto;background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:10px;font:12px/1.4 system-ui,sans-serif;box-shadow:none}
+      #fdu-xk-banner{position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#f59e0b;color:#111827;padding:8px 14px;font:14px/1.4 system-ui,sans-serif;display:flex;gap:12px;align-items:center;justify-content:space-between}
+      #fdu-xk-panel{position:fixed;left:12px;top:48px;z-index:2147483647;width:420px;max-height:calc(100vh - 64px);overflow:auto;background:#111827;color:#e5e7eb;border:2px solid #f59e0b;border-radius:10px;font:12px/1.4 system-ui,sans-serif}
       #fdu-xk-panel header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#1f2937;position:sticky;top:0}
       #fdu-xk-panel h1{margin:0;font-size:13px;font-weight:600}
       #fdu-xk-panel .body{padding:8px 10px 12px}
@@ -550,8 +576,16 @@
   }
 
   function injectPanel() {
-    if (document.getElementById("fdu-xk-panel")) return;
+    if (!document.body) return;
     injectStyle();
+    if (!document.getElementById("fdu-xk-banner")) {
+      const bar = document.createElement("div");
+      bar.id = "fdu-xk-banner";
+      bar.innerHTML =
+        "<strong>复旦选课占用表已运行</strong><span>点左侧格子占住不能上课的节次。这不是学校自带功能。</span>";
+      document.body.appendChild(bar);
+    }
+    if (document.getElementById("fdu-xk-panel")) return;
     const panel = document.createElement("aside");
     panel.id = "fdu-xk-panel";
     if (state.collapsed) panel.classList.add("collapsed");
@@ -617,12 +651,29 @@
   }
 
   function boot() {
-    hookNetwork();
-    if (document.body) injectPanel();
-    else document.addEventListener("DOMContentLoaded", injectPanel);
-    watchDom();
-    refreshSelected();
-    scheduleApply();
+    const go = function () {
+      try {
+        injectPanel();
+      } catch (err) {
+        console.error("[fdu-xk-busy] panel", err);
+      }
+      try {
+        hookNetwork();
+      } catch (err) {
+        console.error("[fdu-xk-busy] hook", err);
+      }
+      try {
+        watchDom();
+      } catch (err) {}
+      try {
+        refreshSelected();
+      } catch (err) {}
+      scheduleApply();
+    };
+    if (document.body) go();
+    else document.addEventListener("DOMContentLoaded", go);
+    setTimeout(go, 800);
+    setTimeout(go, 2500);
   }
 
   boot();
