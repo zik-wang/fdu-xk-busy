@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "复旦选课占用表",
+  "version": "1.0.0",
+  "description": "新版 xk.fudan.edu.cn：无法上课时间表 + 邯郸/枫林连堂跨校提示。不自动选课。",
+  "content_scripts": [
+    {
+      "matches": ["https://xk.fudan.edu.cn/course-selection/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
